@@ -1,139 +1,83 @@
 #include <vks/Model.hpp>
-#include <stdexcept>
-#include <cstring>
 
-namespace vks {
+#include "vks/Application.hpp"
+#include "vks/CommandBuffers.hpp"
+#include "vks/Basic/BasicCommandBuffers.hpp"
+using namespace vks;
 
-Model::Model(const Device& device, const CommandPool& commandPool, const std::vector<geometry::Vertex>& vertices, const std::vector<uint32_t>& indices)
-    : m_device(device), m_commandPool(commandPool), m_indexCount(static_cast<uint32_t>(indices.size())) {
-    createVertexBuffer(vertices);
-    createIndexBuffer(indices);
+void Model::createSphere(
+    const vks::Device& device,
+    VkCommandPool commandPool,
+    float radius,
+    uint32_t sectors,
+    uint32_t stacks)
+{
+    // 1. Generate the data on the CPU
+    std::vector<vks::geometry::Vertex> vertices;
+    std::vector<uint32_t> indices;
+    vks::geometry::createSphere(vertices, indices, radius, sectors, stacks);
+
+    m_vertexCount = static_cast<uint32_t>(vertices.size());
+    m_indexCount = static_cast<uint32_t>(indices.size());
+
+    // 2. Upload vertex data to the GPU
+    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * m_vertexCount;
+    createBufferFromData(
+        device,
+        commandPool,
+        vertices.data(),
+        vertexBufferSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        m_vertexBuffer);
+
+    // 3. Upload index data to the GPU
+    VkDeviceSize indexBufferSize = sizeof(indices[0]) * m_indexCount;
+    createBufferFromData(
+        device,
+        commandPool,
+        indices.data(),
+        indexBufferSize,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        m_indexBuffer);
 }
 
-Model::~Model() {
-    vkDestroyBuffer(m_device.logical(), m_indexBuffer, nullptr);
-    vkFreeMemory(m_device.logical(), m_indexBufferMemory, nullptr);
-    vkDestroyBuffer(m_device.logical(), m_vertexBuffer, nullptr);
-    vkFreeMemory(m_device.logical(), m_vertexBufferMemory, nullptr);
+void Model::createBufferFromData(
+    const vks::Device& device,
+    VkCommandPool commandPool,
+    void* data,
+    VkDeviceSize size,
+    VkBufferUsageFlags usage,
+    std::unique_ptr<vks::Buffer>& outBuffer)
+{
+    // 1. Create a "staging" buffer on the CPU
+    // This is a temporary buffer that's host-visible (mappable)
+    vks::Buffer stagingBuffer{
+        device,
+        size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, // It's a "source" for a transfer
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    };
+
+    // 2. Map and copy data to the staging buffer
+    stagingBuffer.map();
+    stagingBuffer.writeToBuffer(data);
+    stagingBuffer.unmap();
+
+    // 3. Create the final "device" buffer
+    // This buffer is DEVICE_LOCAL (fast GPU memory) but not host-visible
+    outBuffer = std::make_unique<vks::Buffer>(
+        device,
+        size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, // It's a "destination" AND its final usage
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+
+    CommandBuffers::SingleTimeCommands(device, Application::getInstance().getCommandPool(), [&](const VkCommandBuffer& commandBuffer)
+    {
+        VkBufferCopy copyRegion{};
+        copyRegion.srcOffset = 0;
+        copyRegion.dstOffset = 0;
+        copyRegion.size = size;
+        vkCmdCopyBuffer(commandBuffer, stagingBuffer.getBuffer(), outBuffer->getBuffer(), 1, &copyRegion);
+    });
 }
-
-void Model::bind(VkCommandBuffer commandBuffer) {
-    VkBuffer vertexBuffers[] = {m_vertexBuffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-}
-
-void Model::createVertexBuffer(const std::vector<geometry::Vertex>& vertices) {
-    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(m_device.logical(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), (size_t) bufferSize);
-    vkUnmapMemory(m_device.logical(), stagingBufferMemory);
-
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_vertexBuffer, m_vertexBufferMemory);
-
-    copyBuffer(stagingBuffer, m_vertexBuffer, bufferSize);
-
-    vkDestroyBuffer(m_device.logical(), stagingBuffer, nullptr);
-    vkFreeMemory(m_device.logical(), stagingBufferMemory, nullptr);
-}
-
-void Model::createIndexBuffer(const std::vector<uint32_t>& indices) {
-    VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(m_device.logical(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, indices.data(), (size_t) bufferSize);
-    vkUnmapMemory(m_device.logical(), stagingBufferMemory);
-
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_indexBuffer, m_indexBufferMemory);
-
-    copyBuffer(stagingBuffer, m_indexBuffer, bufferSize);
-
-    vkDestroyBuffer(m_device.logical(), stagingBuffer, nullptr);
-    vkFreeMemory(m_device.logical(), stagingBufferMemory, nullptr);
-}
-
-void Model::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateBuffer(m_device.logical(), &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create buffer!");
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(m_device.logical(), buffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-    if (vkAllocateMemory(m_device.logical(), &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate buffer memory!");
-    }
-
-    vkBindBufferMemory(m_device.logical(), buffer, bufferMemory, 0);
-}
-
-void Model::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = m_commandPool.handle();
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(m_device.logical(), &allocInfo, &commandBuffer);
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-    VkBufferCopy copyRegion{};
-    copyRegion.size = size;
-    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-
-    vkEndCommandBuffer(commandBuffer);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    vkQueueSubmit(m_device.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_device.graphicsQueue());
-
-    vkFreeCommandBuffers(m_device.logical(), m_commandPool.handle(), 1, &commandBuffer);
-}
-
-uint32_t Model::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(m_device.physical(), &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("failed to find suitable memory type!");
-}
-
-} // namespace vks

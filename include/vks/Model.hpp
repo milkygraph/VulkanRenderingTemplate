@@ -1,42 +1,65 @@
-#ifndef MODEL_HPP
-#define MODEL_HPP
+#pragma once
 
-#include <vulkan/vulkan.h>
-#include <vector>
 #include <vks/Device.hpp>
-#include <vks/CommandPool.hpp>
+#include <vks/Buffer.hpp>
 #include <vks/Geometry.hpp>
+#include <vulkan/vulkan.h>
+#include <memory>
+
 
 namespace vks
 {
+    /**
+     * @brief Manages a 3D model's geometry on the GPU.
+     * This class owns the VkBuffer for vertices and indices.
+     * It's designed to be stored in a registry (e.g., std::map<string, Model>)
+     */
     class Model
     {
     public:
-        Model(const Device& device, const CommandPool& commandPool, const std::vector<geometry::Vertex>& vertices,
-              const std::vector<uint32_t>& indices);
-        ~Model();
+        /**
+         * @brief Default constructor for creating an empty model.
+         */
+        Model() = default;
+        ~Model() = default;
 
-        void bind(VkCommandBuffer commandBuffer);
+        void Model::createSphere(
+            const vks::Device& device,
+            VkCommandPool commandPool,
+            float radius,
+            uint32_t sectors,
+            uint32_t stacks);
 
+        // Models are unique assets, so delete copy operations.
+        Model(const Model&) = delete;
+        Model& operator=(const Model&) = delete;
+
+        // Models can be moved (e.g., when placing in a std::map)
+        Model(Model&&) = default;
+        Model& operator=(Model&&) = default;
+
+        // --- Getters for the Render Loop ---
+        VkBuffer getVertexBuffer() const { return m_vertexBuffer->getBuffer(); }
+        VkBuffer getIndexBuffer() const { return m_indexBuffer->getBuffer(); }
         uint32_t getIndexCount() const { return m_indexCount; }
 
-        void createVertexBuffer(const std::vector<geometry::Vertex>& vertices);
-        void createIndexBuffer(const std::vector<uint32_t>& indices);
-        void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
-                          VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-        void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
-        uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+    private:
+        /**
+         * @brief Helper to create and fill a vertex/index buffer using a staging buffer.
+         * This is the correct way to upload data to fast DEVICE_LOCAL memory.
+         */
+        void createBufferFromData(
+            const vks::Device& device,
+            VkCommandPool commandPool,
+            void* data,
+            VkDeviceSize size,
+            VkBufferUsageFlags usage,
+            std::unique_ptr<vks::Buffer>& outBuffer);
 
-        const Device& m_device;
-        const CommandPool& m_commandPool;
+        std::unique_ptr<vks::Buffer> m_vertexBuffer;
+        std::unique_ptr<vks::Buffer> m_indexBuffer;
 
-        VkBuffer m_vertexBuffer;
-        VkDeviceMemory m_vertexBufferMemory;
-        VkBuffer m_indexBuffer;
-        VkDeviceMemory m_indexBufferMemory;
-
-        uint32_t m_indexCount;
+        uint32_t m_vertexCount = 0;
+        uint32_t m_indexCount = 0;
     };
 } // namespace vks
-
-#endif // MODEL_HPP

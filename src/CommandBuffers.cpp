@@ -2,8 +2,6 @@
 #include <vks/CommandPool.hpp>
 #include <vks/Device.hpp>
 #include <vks/GraphicsPipeline.hpp>
-#include <vks/RenderPass.hpp>
-#include <vks/SwapChain.hpp>
 
 #include <stdexcept>
 
